@@ -1,4 +1,4 @@
-# Reinforcement Learning for Music Generation
+# Deep Reinforcement Learning for Music Generation
 
 This repository is for an implementation of music generation with Reinforcement Learning in PyTorch. We adopt the DQN as main policy to generate music sequentially, the reward is 
 
