@@ -2,13 +2,9 @@ import sys
 import os
 import math
 import time
-import glob
-import datetime
-import random
 import pickle
 import json
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,13 +12,12 @@ import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import Dataset, DataLoader
 
-from fast_transformers.builders import TransformerEncoderBuilder
-from fast_transformers.builders import RecurrentEncoderBuilder
-from fast_transformers.masking import TriangularCausalMask
-
 import miditoolkit
 from miditoolkit.midi.containers import Marker, Instrument, TempoChange, Note
-import saving
+from model import LinearTransformer
+
+gid = 0
+os.environ['CUDA_VISIBLE_DEVICES'] = str(gid)
 
 ################################################################################
 # config
@@ -32,11 +27,12 @@ path_data_root = '/data/dataset_Pop1K7/representations/uncond/cp/ailab17k_from-s
 path_train_data = os.path.join(path_data_root, 'train_data_linear.npz')
 path_dictionary = os.path.join(path_data_root, 'dictionary.pkl')
 
-###--- Checkpoint ---###
+###--- Load checkpoint ---###
 path_saved_ckpt = './ckpt/dqn_best.pt' 
 
-###--- Number of song  ---###
-num_songs = 5
+###--- Generated config  ---###
+generate_songs = 5
+bar_production = 50
 
 ###--- Directory  ---###
 path_gendir = 'gen_midis'
@@ -44,25 +40,21 @@ os.makedirs(path_gendir, exist_ok=True)
 
 ###--- Parameter ---###
 D_MODEL = 512
-N_LAYER = 12
+N_LAYER = 10
 N_HEAD = 8    
-path_exp = 'exp'
 batch_size = 4
-gid = 0
 init_lr = 0.001
 
-################################################################################
-# File IO
-################################################################################
-os.environ['CUDA_VISIBLE_DEVICES'] = str(gid)
 BEAT_RESOL = 480
 BAR_RESOL = BEAT_RESOL * 4
 TICK_RESOL = BEAT_RESOL // 4
 
 
-# word2event['type']: {0: 'EOS', 1: 'Metrical', 2: 'Note'}
+################################################################################
+# Inference
+################################################################################
+
 def write_midi(words, path_outfile, word2event):
-    
     class_keys = word2event.keys()
     # words = np.load(path_infile)
     midi_obj = miditoolkit.midi.parser.MidiFile()
@@ -71,13 +63,11 @@ def write_midi(words, path_outfile, word2event):
     cur_pos = 0
 
     all_notes = []
-
-    cnt_error = 0
     for i in range(len(words)):
         vals = []
         for kidx, key in enumerate(class_keys):
             vals.append(word2event[key][words[i][kidx]])
-        print(vals)
+        # print(vals)
 
         note_num = (type(vals[3])==str and type(vals[4])==str and type(vals[5])==str)
 
@@ -125,302 +115,16 @@ def write_midi(words, path_outfile, word2event):
                 except:
                     continue
     
-    # save midi
+    # saving midi file
     piano_track = Instrument(0, is_drum=False, name='piano')
     piano_track.notes = all_notes
     midi_obj.instruments = [piano_track]
     midi_obj.dump(path_outfile)
 
-################################################################################
-# Sampling
-################################################################################
-# -- temperature -- #
-def softmax_with_temperature(logits, temperature):
-    probs = np.exp(logits / temperature) / np.sum(np.exp(logits / temperature))
-    return probs
-
-def weighted_sampling(probs):
-    probs /= sum(probs)
-    sorted_probs = np.sort(probs)[::-1]
-    sorted_index = np.argsort(probs)[::-1]
-    word = np.random.choice(sorted_index, size=1, p=sorted_probs)[0]
-    return word
-
-# -- nucleus -- #
-def nucleus(probs, p):
-    probs /= (sum(probs) + 1e-5)
-    sorted_probs = np.sort(probs)[::-1]
-    sorted_index = np.argsort(probs)[::-1]
-    cusum_sorted_probs = np.cumsum(sorted_probs)
-    after_threshold = cusum_sorted_probs > p
-    if sum(after_threshold) > 0:
-        last_index = np.where(after_threshold)[0][0] + 1
-        candi_index = sorted_index[:last_index]
-    else:
-        candi_index = sorted_index[:]
-    candi_probs = [probs[i] for i in candi_index]
-    candi_probs /= sum(candi_probs)
-    word = np.random.choice(candi_index, size=1, p=candi_probs)[0]
-    return word
-
-def sampling(logit, p=None, t=1.0):
-    logit = logit.squeeze().cpu().numpy()
-    probs = softmax_with_temperature(logits=logit, temperature=t)
-    
-    if p is not None:
-        cur_word = nucleus(probs, p=p)
-    else:
-        cur_word = weighted_sampling(probs)
-    return cur_word
 
 
-################################################################################
-# Model
-################################################################################
-def network_paras(model):
-    # compute only trainable params
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-    params = sum([np.prod(p.size()) for p in model_parameters])
-    return params
-
-
-class Embeddings(nn.Module):
-    def __init__(self, n_token, d_model):
-        super(Embeddings, self).__init__()
-        self.lut = nn.Embedding(n_token, d_model)
-        self.d_model = d_model
-
-    def forward(self, x):
-        return self.lut(x) * math.sqrt(self.d_model)
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=20000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
-
-
-class TransformerModel(nn.Module):
-    def __init__(self, n_token, is_training=True):
-        super(TransformerModel, self).__init__()
-
-        # --- params config --- #
-        self.n_token = n_token   
-        self.d_model = D_MODEL 
-        self.n_layer = N_LAYER #
-        self.dropout = 0.1
-        self.n_head = N_HEAD #
-        self.d_head = D_MODEL // N_HEAD
-        self.d_inner = 2048
-        self.loss_func = nn.CrossEntropyLoss(reduction='none')
-        self.emb_sizes = [128, 256, 64, 512, 128, 128]
-
-        # --- modules config --- #
-        print('>>>>>:', self.n_token)
-        self.word_emb_tempo     = Embeddings(self.n_token[0], self.emb_sizes[0])
-        self.word_emb_chord     = Embeddings(self.n_token[1], self.emb_sizes[1])
-        self.word_emb_barbeat   = Embeddings(self.n_token[2], self.emb_sizes[2])
-        self.word_emb_pitch     = Embeddings(self.n_token[3], self.emb_sizes[3])
-        self.word_emb_duration  = Embeddings(self.n_token[4], self.emb_sizes[4])
-        self.word_emb_velocity  = Embeddings(self.n_token[5], self.emb_sizes[5])
-        self.pos_emb            = PositionalEncoding(self.d_model, self.dropout)
-
-        # linear 
-        self.in_linear = nn.Linear(np.sum(self.emb_sizes), self.d_model)
-
-        # encoder
-        if is_training:
-            # encoder (training)
-            self.transformer_encoder = TransformerEncoderBuilder.from_kwargs(
-                n_layers=self.n_layer,
-                n_heads=self.n_head,
-                query_dimensions=self.d_model//self.n_head,
-                value_dimensions=self.d_model//self.n_head,
-                feed_forward_dimensions=2048,
-                activation='gelu',
-                dropout=0.1,
-                attention_type="causal-linear",
-            ).get()
-        else:
-            # encoder (inference)
-            print(' [o] using RNN backend.')
-            self.transformer_encoder = RecurrentEncoderBuilder.from_kwargs(
-                n_layers=self.n_layer,
-                n_heads=self.n_head,
-                query_dimensions=self.d_model//self.n_head,
-                value_dimensions=self.d_model//self.n_head,
-                feed_forward_dimensions=2048,
-                activation='gelu',
-                dropout=0.1,
-                attention_type="causal-linear",
-            ).get()
-
-        # blend with type
-        self.project_concat_type = nn.Linear(self.d_model, self.d_model)
-
-        # individual output
-        self.proj_tempo    = nn.Linear(self.d_model, self.n_token[0])        
-        self.proj_chord    = nn.Linear(self.d_model, self.n_token[1])
-        self.proj_barbeat  = nn.Linear(self.d_model, self.n_token[2])
-        self.proj_pitch    = nn.Linear(self.d_model, self.n_token[3])
-        self.proj_duration = nn.Linear(self.d_model, self.n_token[4])
-        self.proj_velocity = nn.Linear(self.d_model, self.n_token[5])
-
-    def compute_loss(self, predict, target, loss_mask):
-        loss = self.loss_func(predict, target)
-        loss = loss * loss_mask
-        loss = torch.sum(loss) / torch.sum(loss_mask)
-        return loss
-
-    def train_step(self, x, target, loss_mask):
-        h  = self.forward_hidden(x)
-        y_tempo, y_chord, y_barbeat, y_pitch, y_duration, y_velocity = self.forward_output(h, target)
+def inference_from_scratch(model, word2event, bar_cond):
         
-        # reshape (b, s, f) -> (b, f, s)
-        y_tempo     = y_tempo[:, ...].permute(0, 2, 1)
-        y_chord     = y_chord[:, ...].permute(0, 2, 1)
-        y_barbeat   = y_barbeat[:, ...].permute(0, 2, 1)
-        y_pitch     = y_pitch[:, ...].permute(0, 2, 1)
-        y_duration  = y_duration[:, ...].permute(0, 2, 1)
-        y_velocity  = y_velocity[:, ...].permute(0, 2, 1)
-        
-        # loss
-        loss_tempo = self.compute_loss(
-                y_tempo, target[..., 0], loss_mask)
-        loss_chord = self.compute_loss(
-                y_chord, target[..., 1], loss_mask)
-        loss_barbeat = self.compute_loss(
-                y_barbeat, target[..., 2], loss_mask)
-        loss_pitch = self.compute_loss(
-                y_pitch, target[..., 3], loss_mask)
-        loss_duration = self.compute_loss(
-                y_duration, target[..., 4], loss_mask)
-        loss_velocity = self.compute_loss(
-                y_velocity, target[..., 5], loss_mask)
-
-        return loss_tempo, loss_chord, loss_barbeat, loss_pitch, loss_duration, loss_velocity
-
-
-    def forward_hidden(self, x, memory=None, is_training=True):
-        '''
-        linear transformer: b x s x f
-        x.shape=(bs, nf)
-        '''
-        # embeddings
-        emb_tempo   =  self.word_emb_tempo(x[..., 0])
-        emb_chord   =  self.word_emb_chord(x[..., 1])
-        emb_barbeat =  self.word_emb_barbeat(x[..., 2])         # emb_type = self.word_emb_type(x[..., 3])
-        emb_pitch   =  self.word_emb_pitch(x[..., 3])
-        emb_duration = self.word_emb_duration(x[..., 4])
-        emb_velocity = self.word_emb_velocity(x[..., 5])
-        
-        embs = torch.cat(
-            [
-                emb_tempo,
-                emb_chord,
-                emb_barbeat,
-                emb_pitch,
-                emb_duration,
-                emb_velocity,
-            ], dim=-1)
-
-        emb_linear = self.in_linear(embs)
-        pos_emb = self.pos_emb(emb_linear)
-
-        # assert False
-        
-        # transformer
-        if is_training:
-            # mask
-            attn_mask = TriangularCausalMask(pos_emb.size(1), device=x.device)
-            h = self.transformer_encoder(pos_emb, attn_mask)            # y: b x s x d_model
-
-            # project type
-            # y_type = self.proj_type(h)
-            return h
-        else:
-            pos_emb = pos_emb.squeeze(0)
-            h, memory = self.transformer_encoder(pos_emb, memory=memory) # y: s x d_model
-            
-            # project type
-            # y_type = self.proj_type(h)
-            return h, memory
-
-
-    def forward_output(self, h, y):
-        '''
-        for training
-        '''
-        # tf_skip_type = self.word_emb_type(y[..., 3])
-        # # project other
-        # y_concat_type = torch.cat([h, tf_skip_type], dim=-1)
-        # y_  = self.project_concat_type(y_concat_type)
-        y_tempo    = self.proj_tempo(h)
-        y_chord    = self.proj_chord(h)
-        y_barbeat  = self.proj_barbeat(h)
-        y_pitch    = self.proj_pitch(h)
-        y_duration = self.proj_duration(h)
-        y_velocity = self.proj_velocity(h)
-
-        return  y_tempo, y_chord, y_barbeat, y_pitch, y_duration, y_velocity
-
-    # Neede to modify
-    def froward_output_sampling(self, h):
-        '''
-        for inference
-        '''
-        # sample type
-        # y_type_logit = y_type[0, :]
-        # cur_word_type = sampling(y_type_logit, p=0.90)
-        # type_word_t = torch.from_numpy(np.array([cur_word_type])).long().cuda().unsqueeze(0)
-
-        # tf_skip_type = self.word_emb_type(type_word_t).squeeze(0)
-        # # concat
-        # y_concat_type = torch.cat([h, tf_skip_type], dim=-1)
-        # y_  = self.project_concat_type(y_concat_type)
-
-        # project other
-        y_tempo    = self.proj_tempo(h)
-        y_chord    = self.proj_chord(h)
-        y_barbeat  = self.proj_barbeat(h)
-        y_pitch    = self.proj_pitch(h)
-        y_duration = self.proj_duration(h)
-        y_velocity = self.proj_velocity(h)
-        
-        # sampling gen_cond
-        cur_word_tempo =    sampling(y_tempo, t=1.2, p=0.9)
-        cur_word_barbeat =  sampling(y_barbeat, t=1.2)
-        cur_word_chord   =   sampling(y_chord, p=0.99)
-        cur_word_pitch =    sampling(y_pitch, p=0.9)
-        cur_word_duration = sampling(y_duration, t=2, p=0.9)
-        cur_word_velocity = sampling(y_velocity, t=5)        
-
-        # collect
-        next_arr = np.array([
-            cur_word_tempo,
-            cur_word_chord,
-            cur_word_barbeat,
-            cur_word_pitch,
-            cur_word_duration,
-            cur_word_velocity,
-            ])        
-        return next_arr
-
-
-    def inference_from_scratch(self, word2event, bar_cond):
-
         classes = word2event.keys()
         def print_word_cp(cp):
             result = [word2event[k][cp[idx]] for idx, k in enumerate(classes)]
@@ -447,24 +151,24 @@ class TransformerModel(nn.Module):
                 input_ = init_t[step, :].unsqueeze(0).unsqueeze(0)
                 final_res.append(init[step, :][None, ...])
 
-                h, memory = self.forward_hidden(input_, memory, is_training=False)
+                h, memory = model.forward_hidden(input_, memory, is_training=False)
 
             print('------ generate ------')
             while(True):
                 # sample others
-                next_arr = self.froward_output_sampling(h)      # Need to modified
+                next_arr = model.forward_output_sampling(h)     
                 final_res.append(next_arr[None, ...])
                 print('bar:', cnt_bar, end= '  ==')
                 print_word_cp(next_arr)
 
                 # forward
-                input_ = torch.from_numpy(next_arr).long().cuda()
+                input_  = torch.from_numpy(next_arr).long().cuda()
                 input_  = input_.unsqueeze(0).unsqueeze(0)
-                h, memory = self.forward_hidden(input_, memory, is_training=False)
+                h, memory = model.forward_hidden(input_, memory, is_training=False)
 
                 if word2event['bar-beat'][next_arr[2]] == 'Bar':
                     cnt_bar += 1
-                    
+                
                 # end of sequence
                 if cnt_bar == bar_cond:
                     break
@@ -473,57 +177,24 @@ class TransformerModel(nn.Module):
         final_res = np.concatenate(final_res)
         print(final_res.shape)
         return final_res
-
-
-##########################################################################################################################
-# Script
-##########################################################################################################################
-def generate():
-
-    # load
-    dictionary = pickle.load(open(path_dictionary, 'rb'))
-    event2word, word2event = dictionary
-    # Modify encoding 
-    del event2word['type']
-    del word2event['type']
-
-    # outdir
-    os.makedirs(path_gendir, exist_ok=True)
-
-    # config
-    n_class = []
-    for key in event2word.keys():
-        n_class.append(len(dictionary[0][key]))
-
-    # init model
-    net = TransformerModel(n_class, is_training=False)
-    net.cuda()
-    net.eval()
     
-    # load model (epoch, 'model_state_dict', 'optimizer_state_dict')
-    print('[*] load model from:',  path_saved_ckpt)
-    checkpoint = torch.load(path_saved_ckpt)
-    net.load_state_dict(checkpoint)
-    # net.load_state_dict(path_saved_ckpt)
 
-    # gen
+def generate(model, word2event): 
+    
     start_time = time.time()
     song_time_list = []
     words_len_list = []
 
-    # break condition
-    bar_production = 30
-
     cnt_tokens_all = 0 
     sidx = 0
-
-    while sidx < num_songs:
+    
+    while sidx < generate_songs:
         try:
             start_time = time.time()
             print('current idx:', sidx)
             path_outfile = os.path.join(path_gendir, 'get_{}.mid'.format(str(sidx)))
 
-            res = net.inference_from_scratch(word2event, bar_production)
+            res = inference_from_scratch(model, word2event, bar_production)
             write_midi(res, path_outfile, word2event)
 
             song_time = time.time() - start_time
@@ -538,7 +209,7 @@ def generate():
             raise ValueError(' [x] terminated.')
         except:
             continue
-        
+    
     print('ave token time:', sum(words_len_list) / sum(song_time_list))
     print('ave song time:', np.mean(song_time_list))
     
@@ -554,7 +225,30 @@ def generate():
 
 
 if __name__ == '__main__':
+    
+    # load
+    dictionary = pickle.load(open(path_dictionary, 'rb'))
+    event2word, word2event = dictionary
+    # Modify encoding 
+    del event2word['type']
+    del word2event['type']     # word2event['type']: {0: 'EOS', 1: 'Metrical', 2: 'Note'}
 
-    # -- inference -- #
-    generate()
+    # output dir
+    os.makedirs(path_gendir, exist_ok=True)
+
+    # Token Class 
+    n_class = []
+    for key in event2word.keys():
+        n_class.append(len(dictionary[0][key]))
+
+    # Model
+    model = LinearTransformer(n_class, is_training=False)
+    model.cuda()
+    model.eval()
+    
+    print(f'Load model from: {path_saved_ckpt}')
+    checkpoint = torch.load(path_saved_ckpt)
+    model.load_state_dict(checkpoint['model_state_dict'])    
+
+    generate(model, word2event)
 

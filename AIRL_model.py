@@ -15,8 +15,6 @@ import pickle
 from tqdm import tqdm
 
 # -- Config -- # 
-gpu_id = 0
-os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True 
 
@@ -28,7 +26,7 @@ N_HEAD = 8
 path_exp = 'exp'
 N_STATES = 50
 
-Pretrain_ckpt = '/data/Der_CODES/DQN-cp/ckpt/trainloss_22.pt' 
+# Pretrain_ckpt = '/data/Der_CODES/DQN-cp/ckpt/trainloss_22.pt' 
 
 
 ################################################################################
@@ -42,7 +40,6 @@ class Embeddings(nn.Module):
 
     def forward(self, x):
         return self.lut(x) * math.sqrt(self.d_model)
-
 
 ################################################################################
 # Discriminator-LongFormer 
@@ -71,14 +68,12 @@ class LongFormer(nn.Module):
         self.proj = nn.Linear(sum(self.emb_sizes), self.D_MODEL)
 
         # individual output
-        self.proj_tempo    = nn.Linear(self.D_MODEL, N_STATES)        
-        self.proj_chord    = nn.Linear(self.D_MODEL, N_STATES)
-        self.proj_barbeat  = nn.Linear(self.D_MODEL, N_STATES)
-        self.proj_pitch    = nn.Linear(self.D_MODEL, N_STATES)
-        self.proj_duration = nn.Linear(self.D_MODEL, N_STATES)
-        self.proj_velocity = nn.Linear(self.D_MODEL, N_STATES)
-
-        self.target_proj   = nn.Linear(N_STATES, N_STATES)        
+        self.proj_tempo    = nn.Linear(self.D_MODEL, self.n_token[0])        
+        self.proj_chord    = nn.Linear(self.D_MODEL, self.n_token[1])
+        self.proj_barbeat  = nn.Linear(self.D_MODEL, self.n_token[2])
+        self.proj_pitch    = nn.Linear(self.D_MODEL, self.n_token[3])
+        self.proj_duration = nn.Linear(self.D_MODEL, self.n_token[4])
+        self.proj_velocity = nn.Linear(self.D_MODEL, self.n_token[5])
 
 
         self.longformer_config = LongformerConfig(max_position_embeddings=self.MAX_SEQ,
@@ -100,7 +95,7 @@ class LongFormer(nn.Module):
             nn.Tanh(),
             nn.Linear(128, 64),
             nn.Tanh(),
-            nn.Linear(64, 6), 
+            nn.Linear(64, 1), 
             nn.Sigmoid()
         )
     
@@ -149,32 +144,30 @@ class LongFormer(nn.Module):
         
         outputs = self.longformer(inputs_embeds=cat_emb, attention_mask=loss_mask)
         sequence_output = outputs.last_hidden_state         # (batch, seq_len, hidden_size)
-        sequence_mean   = sequence_output.mean(dim=1)       # (batch, hidden_size)
 
         # individual prediction
-        y_tempo    = self.proj_tempo(sequence_mean)
-        y_chord    = self.proj_chord(sequence_mean)
-        y_barbeat  = self.proj_barbeat(sequence_mean)
-        y_pitch    = self.proj_pitch(sequence_mean)
-        y_duration = self.proj_duration(sequence_mean)
-        y_velocity = self.proj_velocity(sequence_mean)
+        y_tempo    = self.proj_tempo(sequence_output)
+        y_chord    = self.proj_chord(sequence_output)
+        y_barbeat  = self.proj_barbeat(sequence_output)
+        y_pitch    = self.proj_pitch(sequence_output)
+        y_duration = self.proj_duration(sequence_output)
+        y_velocity = self.proj_velocity(sequence_output)
 
-        # individual target
-        target_tempo    = self.target_proj(target[..., 0].to(torch.float32))
-        target_chord    = self.target_proj(target[..., 1].to(torch.float32))
-        target_barbeat  = self.target_proj(target[..., 2].to(torch.float32))
-        target_pitch    = self.target_proj(target[..., 3].to(torch.float32))
-        target_duration = self.target_proj(target[..., 4].to(torch.float32))
-        target_velocity = self.target_proj(target[..., 5].to(torch.float32))
-        
-        
-        loss_tempo   = self.compute_CEloss( y_tempo,   target_tempo, loss_mask)
-        loss_chord   = self.compute_CEloss( y_chord,   target_chord, loss_mask)
-        loss_barbeat = self.compute_CEloss( y_barbeat, target_barbeat, loss_mask)
-        loss_pitch   = self.compute_CEloss( y_pitch,   target_pitch, loss_mask)
-        loss_duration = self.compute_CEloss(y_duration,target_duration, loss_mask)
-        loss_velocity = self.compute_CEloss(y_velocity,target_velocity, loss_mask)
+        # dimenional changing
+        y_tempo    = y_tempo[:,...].permute(0,2,1)
+        y_chord    = y_chord[:,...].permute(0,2,1)
+        y_barbeat  = y_barbeat[:,...].permute(0,2,1)
+        y_pitch    = y_pitch[:,...].permute(0,2,1)
+        y_duration = y_duration[:,...].permute(0,2,1)
+        y_velocity = y_velocity[:,...].permute(0,2,1)
 
+        loss_tempo    = self.compute_CEloss(y_tempo,    target[...,0], loss_mask)
+        loss_chord    = self.compute_CEloss(y_chord,    target[...,1], loss_mask)
+        loss_barbeat  = self.compute_CEloss(y_barbeat,  target[...,2], loss_mask)
+        loss_pitch    = self.compute_CEloss(y_pitch,    target[...,3], loss_mask)
+        loss_duration = self.compute_CEloss(y_duration, target[...,4], loss_mask)
+        loss_velocity = self.compute_CEloss(y_velocity, target[...,5], loss_mask)
+        
         ce_loss = (loss_tempo+ loss_chord+ loss_barbeat+ loss_pitch+ loss_duration+ loss_velocity)/6
         return ce_loss 
 
