@@ -3,7 +3,7 @@
 This repository is for an implementation of music generation with Reinforcement Learning in PyTorch. We adopt the DQN as main policy to generate music sequentially, the reward is 
 
 ## Model architecture
-![Aritecture](Aritecture.png)
+![Aritecture](AIRL.png)
 
 
 # Getting started
