@@ -3,10 +3,9 @@
 This repository is an implementation of automated music composition with Reinforcement Learning(RL) in PyTorch.
 The Deep Q Network (DQN) is our primary policy for automated music composition.
 Within the RL framework, a well-designed reward module is essential for success.
-
 Therefore, we developed the Inverse Reinforcement Learning (IRL) framework for the purpose of reward learning within an adversarial framework. 
 The advantage of our IRL algorithm is that it not only enhances policy optimization but also requires no music theory-based rules.
-The overall system leads to more diverse melodies and maintains the harmony of the generated music sequences. 
+The overall system leads to more diverse melodies and maintains the harmony of the generated music sequences.
 
 ## Model architecture
 ![Aritecture](AIRL.png)
