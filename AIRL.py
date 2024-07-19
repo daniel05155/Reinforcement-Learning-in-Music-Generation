@@ -13,6 +13,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from AIRL_model import LongFormer   # Discriminator
 from utils import tri_loss_plot, score_plotting
+from torch import autograd
+from torch.autograd import Variable
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True 
@@ -47,7 +49,7 @@ class RewardDiscri(nn.Module):
         self.last_unit = nn.Linear(6,1).cuda()
 
         self.init_lr = 0.001
-        self.epoch_disc = 10
+        self.epoch_disc = 5
         self.batch_size = 100
 
         self.optim_disc = optim.Adam(self.disc_model.parameters(), lr=self.init_lr)
@@ -60,7 +62,6 @@ class RewardDiscri(nn.Module):
         # torch.cuda.empty_cache()
         self.disc_model.train()
         seq_score = self.disc_model(states_batch, mask_states_batch)
-       
         return seq_score   # return -F.logsigmoid(vs)  
 
     
@@ -89,6 +90,34 @@ class RewardDiscri(nn.Module):
         return pred_val
     
 
+    def calculate_gradient_penalty(self, expert_state, agent_state, mask_states_batch):
+        eta = torch.FloatTensor(self.batch_size,1,1).uniform_(0,1)
+        eta = eta.expand(self.batch_size, expert_state.size(1), expert_state.size(2))
+        eta = eta.cuda()
+
+        lambda_term = 5.0
+        interpolated = eta * expert_state + ((1 - eta) * agent_state)
+        interpolated = interpolated.long().cuda()
+
+        # calculate probability of interpolated examples
+        prob_interpolated = self.disc_model(interpolated, mask_states_batch)
+
+        # define it to calculate gradient
+        interpolated = interpolated.float()
+        interpolated = Variable(interpolated, requires_grad=True)
+
+        # Error # 
+        # calculate gradients of probabilities with respect to examples
+        gradients = autograd.grad(outputs=prob_interpolated, inputs=interpolated,
+                               grad_outputs=torch.ones( prob_interpolated.size()).cuda(),
+                               create_graph=True, retain_graph=True, allow_unused=True)[0]
+
+        # flatten the gradients to it calculates norm batchwise
+        # gradients = gradients.view(gradients.size(0), -1)
+        grad_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * lambda_term
+        return grad_penalty
+
+
     def update_disc(self, agent_episode, expert_episode, train=True):
         # torch.cuda.empty_cache()
         agent_state_action, _, _,  agent_nextstate_action, agent_done = agent_episode
@@ -108,7 +137,7 @@ class RewardDiscri(nn.Module):
                 record_loss = 0.0
                 first_exp_loss = 0.0
                 sec_agent_loss = 0.0
-                third_ce_loss    = 0.0
+                third_ce_loss  = 0.0
 
                 for idx in tqdm(range(data_length//self.batch_size), desc='IRL Training'):
                     bidx_st =  idx * self.batch_size
@@ -127,7 +156,6 @@ class RewardDiscri(nn.Module):
                                                 mask_states_batch, mask_next_state_batch)
 
                     exp_BCELoss  = self.BCE_criterion(exp_logits, exp_label)  
-                    # exp_BCELoss.backward()
                     
                     #  -- Agent  -- #
                     states_batch = agent_state_action[bidx_st:bidx_ed, :, :].long().cuda() 
@@ -151,7 +179,7 @@ class RewardDiscri(nn.Module):
                     sec_agent_loss = sec_agent_loss + agent_BCELoss.item()
                     third_ce_loss  = third_ce_loss + CE_loss.item()
 
-                    record_loss    = record_loss + global_loss.item()
+                    record_loss  = record_loss + global_loss.item()
                     
                     #  -- Save checkpoint  -- #
                     if epoch%5 == 0:

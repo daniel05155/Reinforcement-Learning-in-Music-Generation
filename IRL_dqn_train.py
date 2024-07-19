@@ -251,8 +251,8 @@ class DQN(object):
 
         # action = torch.cat((tempo[:,-1], chord[:,-1], barbeat[:,-1],pitch[:,-1], duration[:,-1], velocity[:,-1]), dim=0)
         # action = action.unsqueeze(0)
-
         # Action = (N_ACTIONS, 1)
+        
         action = None
         for idx in range(N_ACTIONS):
             tmp = torch.cat((tempo[:,-idx], chord[:,-idx], barbeat[:,-idx],pitch[:,-idx], duration[:,-idx], velocity[:,-idx]), dim=0)
@@ -261,7 +261,6 @@ class DQN(object):
                 action = tmp
             else:
                 action = torch.cat((action, tmp), dim=0)
-
         return action
     
     
@@ -269,7 +268,6 @@ class DQN(object):
         # Update target network
         if self.target_count  % Target_update  == 0:
             self.target_net.load_state_dict(self.eval_net.state_dict()) 
-
         self.target_count+=1
         
         # Expert 
@@ -323,7 +321,6 @@ class DQN(object):
         q_targets_duration  = agent_reward + GAMMA * (1-agent_done) * max_next_q_duration
         q_targets_velocity  = agent_reward + GAMMA * (1-agent_done) * max_next_q_velocity
         
-        
         tempo_loss      = F.mse_loss(qval_tempo,    q_targets_tempo)
         chord_loss      = F.mse_loss(qval_chord,    q_targets_chord)
         barbeat_loss    = F.mse_loss(qval_barbeat,  q_targets_barbeat)
@@ -334,8 +331,10 @@ class DQN(object):
 
         CE_tempo, CE_chord, CE_barbeat, CE_pitch, CE_duration, CE_velocity = self.eval_net.train_step(agent_state, expert_next_state, mask_next_states)
         CEloss = (CE_tempo+ CE_chord+ CE_barbeat+ CE_pitch+ CE_duration+ CE_velocity) / 6
-        total_loss = 0.2*MSEloss + 0.8*CEloss
 
+        alpha = 0.3
+        total_loss = alpha*MSEloss + (1-alpha)*CEloss     
+        
         self.ce_val  += CEloss.item()
         self.mse_val += MSEloss.item()
         self.total_val += total_loss.item()
@@ -348,7 +347,6 @@ class DQN(object):
         self.cnt_update+=1
         wandb.log({"MSELoss": MSEloss, "CELoss": CEloss, "AgentLoss": total_loss})   
         tqdm.write('Epoch: {}/{}| Episode: {}/{}| MSE_Loss: {:03f}| CE_Loss: {:03f}| TD_Loss: {:03f}'.format(epoch, NUM_SONGS,num,EPISODES, MSEloss, CEloss, total_loss))
-        
 
         if self.record_fore_epoch < epoch:
             self.record_fore_epoch+=1 
@@ -361,7 +359,6 @@ class DQN(object):
             sec_loss.append(self.ce_val)
             global_loss.append(self.total_val)
 
-
         if update_flag==True and epoch>=410:
             os.makedirs('./ckpt',exist_ok=True)
             torch.save({
@@ -371,7 +368,6 @@ class DQN(object):
                 }, save_ckpt_path )
             
             wandb.save(save_ckpt_path)
-
 
         # Plotting
         if update_flag==True and epoch>=410:
@@ -385,7 +381,6 @@ class DQN(object):
             record = {'Agent':agent_reward, 'first_loss': first_loss, 'sec_loss':sec_loss,' global_loss':  global_loss}
             with open( './ckpt/agent_info.pickle', 'wb') as file:
                 pickle.dump(record, file)
-
 
 
 if __name__ == '__main__':
@@ -423,7 +418,7 @@ if __name__ == '__main__':
     train_x = train_data['x']           # (batch,3584,7):(1625,3584,7)
     train_y = train_data['y']           # (batch,3584,7):(1625,3584,7)    
     train_mask = train_data['mask']     # (batch,3584)
-    num_batch = len(train_x) // batch_size
+    num_batch  = len(train_x) // batch_size
     
     train_x = torch.from_numpy(train_x)
     train_y = torch.from_numpy(train_y)
@@ -453,7 +448,6 @@ if __name__ == '__main__':
         cnt_reward = 0
         
         for num in range(0, EPISODES): 
-            # idx  = np.random.randint(0, SEQ_LEN-WINDOW_SIZE, size=1)[0]
             Expert_state      = expert_x[num: num+WINDOW_SIZE]    
             Expert_next_state = expert_x[num+50: num+50+WINDOW_SIZE]
             Expert_action     = expert_x[num+WINDOW_SIZE]       # expert_x[num+WINDOW_SIZE]
@@ -466,9 +460,8 @@ if __name__ == '__main__':
             action  = Agent.choose_action(state_x.unsqueeze(0), Expert_state.unsqueeze(0))
             
             next_state  = torch.cat((state_x[:N_ACTIONS,:], action), dim=0)      # (state_x, action): Same Dim.
-
             agent_reward = torch.tensor(0.5).float().cuda()  # Temporary reward
-            
+
             ## store_transition  ## 
             AgentBuffer.store_transition(state_x, action, agent_reward, next_state, done)            
             ExpertBuffer.store_transition(Expert_state, action, Expert_reward, 
@@ -478,7 +471,6 @@ if __name__ == '__main__':
 
             ## Update ## 
             if AgentBuffer.memory_counter > BUFFER_SIZE:
-                ###--- Rewarder ---###  -> Plot
                 agent_traj  = AgentBuffer.get()
                 expert_traj = ExpertBuffer.get()
 

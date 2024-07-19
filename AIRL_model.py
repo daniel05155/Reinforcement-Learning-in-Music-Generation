@@ -21,13 +21,12 @@ torch.backends.cudnn.benchmark = True
 # --- modules config --- #
 MAX_SEQ_LEN = 1024
 D_MODEL = 512
-N_LAYER = 6
+N_LAYER = 10
 N_HEAD = 8    
 path_exp = 'exp'
 N_STATES = 50
 
 # Pretrain_ckpt = '/data/Der_CODES/DQN-cp/ckpt/trainloss_22.pt' 
-
 
 ################################################################################
 # Embedding Configuartion
@@ -122,14 +121,13 @@ class LongFormer(nn.Module):
 
         return element_score
 
-
+    
     def compute_CEloss(self, predict, target, loss_mask):
         loss = self.CE_loss(predict, target)
         loss = loss * loss_mask
         loss = torch.sum(loss) / torch.sum(loss_mask)
         return loss
     
-
     def token_forward(self, data, target, loss_mask):
         
         tempo    = self.word_emb_tempo(data[..., 0])          # Take tempo in every note (取每個row的第1個col)
@@ -170,5 +168,4 @@ class LongFormer(nn.Module):
         
         ce_loss = (loss_tempo+ loss_chord+ loss_barbeat+ loss_pitch+ loss_duration+ loss_velocity)/6
         return ce_loss 
-
 
