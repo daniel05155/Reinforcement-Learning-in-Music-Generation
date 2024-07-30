@@ -1,4 +1,4 @@
-# Deep Reinforcement Learning for Music Generation
+# Automated Music Composition Using Deep Reinforcement Learning
 
 This repository is an implementation of automated music composition with Reinforcement Learning(RL) in PyTorch.
 The Deep Q Network (DQN) is our primary policy for automated music composition.
