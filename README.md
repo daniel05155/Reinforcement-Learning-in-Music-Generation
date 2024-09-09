@@ -1,14 +1,16 @@
 # Automated Music Composition Using Deep Reinforcement Learning
 
 This repository is an implementation of automated music composition with Reinforcement Learning(RL) in PyTorch.
-The Deep Q Network (DQN) is our primary policy for automated music composition.
-Within the RL framework, a well-designed reward module is essential for success.
-Therefore, we developed the Inverse Reinforcement Learning (IRL) framework for the purpose of reward learning within an adversarial framework. 
-The advantage of our IRL algorithm is that it not only enhances policy optimization but also requires no music theory-based rules.
-The overall system leads to more diverse melodies and maintains the harmony of the generated music sequences.
+We design a novel deep reinforcement learning-based framework with the self-attention-based neural networks for long-sequence music generation, which differs from the conventional Generative Adversarial Network (GAN).
+Additionally, we utilize  Deep Q Network (DQN)-based and Proximal Policy Optimization (PPO)-based techniquein Reinforcement Learning (RL) with the transformer model to generate pop-style piano music
+sequentially
 
 ## Model architecture
+###  DQN-Baed Architecture
 ![Aritecture](AIRL.png)
+
+###  PPO-Baed Architecture
+![Aritecture](PPO_Architecture.png)
 
 
 # Getting started
