@@ -3,7 +3,7 @@
 This repository is an implementation of automated music composition with Reinforcement Learning(RL) in PyTorch.
 We design a novel deep reinforcement learning-based framework with the self-attention-based neural networks for long-sequence music generation, which differs from the conventional Generative Adversarial Network (GAN).
 Additionally, we utilize  Deep Q Network (DQN)-based and Proximal Policy Optimization (PPO)-based techniquein Reinforcement Learning (RL) with the transformer model to generate pop-style piano music
-sequentially
+sequentially.
 
 ## Model architecture
 ###  DQN-Baed Architecture
