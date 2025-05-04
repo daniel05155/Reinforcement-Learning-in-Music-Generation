@@ -6,12 +6,11 @@ Additionally, we utilize  Deep Q Network (DQN)-based and Proximal Policy Optimiz
 sequentially.
 
 ## Model architecture
-###  DQN-Baed Architecture
-![Aritecture](AIRL.png)
+###  DQN-Based Architecture
+![Aritecture](./dqn_policy/dqn_AIRL.png)
 
-###  PPO-Baed Architecture
-![Aritecture](PPO_Architecture.png)
-
+###  PPO-Based Architecture
+![Aritecture](./ppo_policy/ppo_IRL.png)
 
 # Getting started
 ## Install Dependencies
