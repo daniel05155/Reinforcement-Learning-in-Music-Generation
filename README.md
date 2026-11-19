@@ -30,23 +30,20 @@ Linear Transformer is our pre-trained weights of agent model, which can be downl
 ## Run the Codes
 Our expertiment is based on the unconditional generation with Reinforcement Learning using PyTorch framework in Python.
 
-* Pretrain: 
+### Pretrain: 
 ```
 python agent_pretrain.py
 ```
 
-* Training
+### Training
 ```
 python IRL_dqn_train.py
-
 ```
 
-* Evaluation
+### Evaluation
 ```
 ## Generate midis songs in './gen_midis ##
-
 python testing-no-type-cp.py
-
 ```
 
 ## Demo
