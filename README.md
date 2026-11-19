@@ -30,7 +30,7 @@ Linear Transformer is our pre-trained weights of agent model, which can be downl
 ## Run the Codes
 Our expertiment is based on the unconditional generation with Reinforcement Learning using PyTorch framework in Python.
 
-### Pretrain: 
+### Pretrain
 ```
 python agent_pretrain.py
 ```
